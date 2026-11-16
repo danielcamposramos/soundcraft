@@ -444,3 +444,58 @@ fn half_packing_reduces_the_aspect_before_multiplying() {
     frame.sample_aspect = (u32::MAX, 1);
     assert!(view(&frame, movie.info(), Input::HalfSideBySide, false, frame.rgba.as_ref().len()).is_err());
 }
+
+#[test]
+fn every_spatial_input_keeps_samples_identity_and_delivered_shape() {
+    use crate::stereo::{Input, view};
+    let movie = Movie::open(h264_mp4(1, 1).unwrap()).unwrap();
+    let mut frame = crate::Frame {
+        width: 4,
+        height: 4,
+        rgba: (0..16).flat_map(|v| [v, v + 20, v + 40, 255]).collect(),
+        index: 7,
+        time: 0.35,
+        sample_aspect: (1, 1),
+        stereo_mode: None,
+    };
+    let cases = [
+        (Input::SideBySide, Input::SideBySideRight, 2, 4, [(1, 1), (4, 3)], [0, 1, 4, 5, 8, 9, 12, 13], [2, 3, 6, 7, 10, 11, 14, 15]),
+        (Input::HalfSideBySide, Input::HalfSideBySideRight, 2, 4, [(2, 1), (8, 3)], [0, 1, 4, 5, 8, 9, 12, 13], [2, 3, 6, 7, 10, 11, 14, 15]),
+        (Input::TopBottom, Input::TopBottomRight, 4, 2, [(1, 1), (4, 3)], [0, 1, 2, 3, 4, 5, 6, 7], [8, 9, 10, 11, 12, 13, 14, 15]),
+        (Input::HalfTopBottom, Input::HalfTopBottomRight, 4, 2, [(1, 2), (2, 3)], [0, 1, 2, 3, 4, 5, 6, 7], [8, 9, 10, 11, 12, 13, 14, 15]),
+        (Input::Rows, Input::RowsRight, 4, 2, [(1, 2), (2, 3)], [0, 1, 2, 3, 8, 9, 10, 11], [4, 5, 6, 7, 12, 13, 14, 15]),
+        (Input::Columns, Input::ColumnsRight, 2, 4, [(2, 1), (8, 3)], [0, 2, 4, 6, 8, 10, 12, 14], [1, 3, 5, 7, 9, 11, 13, 15]),
+        (Input::Checkerboard, Input::CheckerboardRight, 2, 4, [(2, 1), (8, 3)], [0, 2, 5, 7, 8, 10, 13, 15], [1, 3, 4, 6, 9, 11, 12, 14]),
+    ];
+    let mut shape_errors = Vec::new();
+    for (first, reversed, width, height, aspects, a, b) in cases {
+        for (shape_index, source_aspect) in [(1, 1), (4, 3)].into_iter().enumerate() {
+            frame.sample_aspect = source_aspect;
+            for (input, right_first) in [(first, false), (reversed, true)] {
+                for swap in [false, true] {
+                    let pair = view(&frame, movie.info(), input, swap, 64).unwrap();
+                    let (left, right) = if right_first ^ swap { (&b, &a) } else { (&a, &b) };
+                    let mut expected = Vec::new();
+                    for y in 0..height {
+                        for eye in [left, right] {
+                            for &index in &eye[y * width..(y + 1) * width] {
+                                expected.extend_from_slice(&frame.rgba[index * 4..index * 4 + 4]);
+                            }
+                        }
+                    }
+                    assert_eq!(pair.rgba.as_ref(), expected, "{input:?}, swap={swap}");
+                    assert_eq!((pair.width as usize, pair.height as usize), (width * 2, height));
+                    assert_eq!((pair.index, pair.time), (frame.index, frame.time));
+                    if pair.sample_aspect != aspects[shape_index] {
+                        shape_errors.push(format!(
+                            "{input:?}, swap={swap}, source={source_aspect:?}: got {:?}, expected {:?}",
+                            pair.sample_aspect, aspects[shape_index]
+                        ));
+                    }
+                    assert!(pair.stereo);
+                }
+            }
+        }
+    }
+    assert!(shape_errors.is_empty(), "{}", shape_errors.join("\n"));
+}

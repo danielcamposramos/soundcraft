@@ -18,7 +18,8 @@ pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub rgba: Arc<[u8]>,
-    /// Exact source sample shape, container pasp first, decoded H.264 VUI otherwise.
+    /// Raw encoded-picture sample aspect, container pasp first, decoded H.264 VUI otherwise.
+    /// The stereo view interprets the packing stride before declaring the native eye shape.
     pub sample_aspect: (u32, u32),
     /// st3d of this presentation sample’s selected description, not a stale first-frame mark.
     pub stereo_mode: Option<u8>,
