@@ -287,6 +287,7 @@ pub struct VideoPool {
     /// The latest playhead picture: movie, its frame index, texture.
     current: Option<(MovieKey, usize, egui::TextureHandle)>,
     current_err: Option<(MovieKey, String)>,
+    native: Option<(MovieKey, f64, Arc<Frame>)>,
     /// Last frame request (to avoid re-sending identical requests).
     last_req: Option<(MovieKey, i64)>,
     /// Pictures shown in the Video window since start (diagnostics).
@@ -312,7 +313,7 @@ impl VideoPool {
                 Done::Info(k, info) => {
                     self.infos.insert(k, info);
                 }
-                Done::Frame(k, _secs, r) => match r {
+                Done::Frame(k, secs, r) => match r {
                     Ok(f) => {
                         let img = color_image(&f);
                         match &mut self.current {
@@ -323,6 +324,7 @@ impl VideoPool {
                             }
                             None => self.current = Some((k, f.index, ctx.load_texture("video-frame", img, egui::TextureOptions::LINEAR))),
                         }
+                        self.native = Some((k, secs, f));
                         self.current_err = None;
                         self.frames_shown += 1;
                     }
@@ -363,6 +365,14 @@ impl VideoPool {
     /// The current playhead picture for `key`, if one has been decoded.
     pub fn current(&self, key: MovieKey) -> Option<&egui::TextureHandle> {
         self.current.as_ref().filter(|c| c.0 == key).map(|c| &c.2)
+    }
+
+    /// Both eyes must be derived from this same completed decode, before any texture scaling.
+    pub fn native(&self, key: MovieKey) -> Option<(f64, &Arc<Frame>)> {
+        if self.current_error(key).is_some() {
+            return None;
+        }
+        self.native.as_ref().filter(|(k, _, _)| *k == key).map(|(_, secs, frame)| (*secs, frame))
     }
 
     pub fn current_error(&self, key: MovieKey) -> Option<&str> {

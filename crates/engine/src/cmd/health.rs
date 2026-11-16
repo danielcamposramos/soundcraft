@@ -170,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_rate_has_unknown_duration_and_uneven_channels_use_shortest() {
+    fn uneven_channels_use_the_shortest_buffer() {
         let mut e = crate::demo::demo_engine();
         let id = e.session().sources.first().unwrap().id;
         let sr = e.session().sample_rate.hz();
@@ -179,9 +179,20 @@ mod tests {
         let r = check(&mut e);
         assert!(r["issues"].as_array().unwrap().iter().any(|i| i["code"] == "uneven_channels"));
         assert!(r["issues"].as_array().unwrap().iter().any(|i| i["code"] == "source_bounds"));
-        e.session_mut().sample_rate = serde_json::from_value(json!(0)).unwrap();
+    }
+
+    #[test]
+    fn zero_rate_is_rejected_by_the_scalar_and_repaired_at_the_session_boundary() {
+        assert!(serde_json::from_value::<soundcraft_time::SampleRate>(json!(0)).is_err());
+        let original = crate::demo::demo_engine();
+        let mut legacy = serde_json::to_value(original.session()).unwrap();
+        legacy["sample_rate"] = json!(0);
+        let restored: soundcraft_model::Session = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.sample_rate, soundcraft_time::SampleRate::HZ_48000);
+        assert_eq!(restored.tracks, original.session().tracks);
+        let mut e = Engine::new(restored);
         let r = check(&mut e);
-        assert!(r["active_audio_end_seconds"].is_null());
-        assert_eq!(r["issues"][0]["code"], "invalid_sample_rate");
+        assert!(r["active_audio_end_seconds"].is_number());
+        assert!(r["issues"].as_array().unwrap().iter().all(|issue| issue["code"] != "invalid_sample_rate"));
     }
 }

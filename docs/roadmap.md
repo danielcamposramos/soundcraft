@@ -88,9 +88,15 @@ There is no `cargo xtask scorecard` in this repo; the measured number is `cargo 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | trivial | Edition stereo Video companion at the audio playhead; MP4 st3d for Motion JPEG/ProRes, explicit H.264 packing; partial stereo-control catalogs; estimates unchanged |
 | 2026-11-05 | trivial | M15: a pt-BR catalog covers menus and `text`/`localized_format!` strings; remains native review, CJK/RTL and the other languages. Estimates unchanged |
 | 2026-10-25 | trivial | Record-workflow evidence: `setup.playback_engine` applies the device and buffer in the desktop app; headless returns `applied: false` |
 | 2026-10-24 | trivial | 27 built-in processors, as the plugin registry holds; the sampler (#108) is no longer listed under plugin essentials |
 | 2026-10-14 | trivial | M8: reject oversized MCP batches before execution (#460) |
 | 2026-10-10 | minor | Added the alpha gate (3 of 6 core workflows fail → pre-alpha) |
 | 2026-10-10 | major | Created from ROADMAP.md's milestones and alpha list; added M12–M17 and the beta plan with estimates |
+
+## Edition stereo video
+
+The edition's played stereo companion and its deliberately bounded metadata coverage are described in [Stereo video](stereo-video.md).
+The existing ordinary Video window, thumbnails and audio callback remain their own owners.

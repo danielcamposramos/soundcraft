@@ -14,6 +14,7 @@ pub const OFFLINE_FLAG: &str = "video.offline";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(noundo "video.stereoInput", "Input packing", [], None, "{source: movie id, input?: auto|mono|side-by-side|..., swap?: bool} — per-file interpretation; never rewrites the movie", always, stereo_input),
         cmd!(noundo "video.online", "Video Track Online", ["Options"], None, "{value?: bool} (toggles when omitted) — when offline the Video window and the Video track stop decoding pictures", always, |e, p| {
             let s = e.session_mut();
             let online = p.get("value").and_then(Value::as_bool).unwrap_or(s.edit.flag(OFFLINE_FLAG));
@@ -44,6 +45,24 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"videos": rows, "online": !s.edit.flag(OFFLINE_FLAG)}))
         }),
     ]
+}
+
+fn stereo_input(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = p.get("source").and_then(Value::as_u64).ok_or_else(|| bad("video.stereoInput", "source movie id required"))?;
+    let path = e.session().videos.iter().find(|v| v.id.0 == id).map(|v| v.path.clone()).ok_or_else(|| bad("video.stereoInput", "no such movie"))?;
+    let input = p
+        .get("input")
+        .map(|v| serde_json::from_value::<soundcraft_video::stereo::Input>(v.clone()).map_err(|err| bad("video.stereoInput", err.to_string())))
+        .transpose()?;
+    let swap = p.get("swap").map(|v| v.as_bool().ok_or_else(|| bad("video.stereoInput", "swap must be a boolean"))).transpose()?;
+    let key = crate::video_stereo::key(&path);
+    if let Some(input) = input {
+        e.session_mut().edit.values.insert(key.clone(), input.id() as f64);
+    }
+    if let Some(swap) = swap {
+        e.session_mut().edit.set_flag(&format!("{key}.swap"), swap);
+    }
+    Ok(json!(crate::video_stereo::options(e.session(), &path)))
 }
 
 fn offset(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -101,6 +120,25 @@ mod tests {
         (e, t)
     }
 
+    #[test]
+    fn stereo_interpretation_is_per_file_atomic_and_roundtrips() {
+        let (mut e, _) = video_engine();
+        let id = e.session().videos[0].id.0;
+        let before = e.session().videos[0].clone();
+        let p = json!({"source": id,"input":"half-side-by-side-right","swap":true});
+        let result = e.execute("video.stereoInput", &p).unwrap();
+        assert_eq!(result, json!({"input":"half-side-by-side-right","swap":true}));
+        assert_eq!(e.session().videos[0], before);
+        assert!(e.execute("video.stereoInput", &json!({"source": id,"input":"rows","swap":7})).is_err());
+        assert_eq!(e.execute("video.stereoInput", &json!({"source":id})).unwrap(), result);
+        let restored: soundcraft_model::Session = serde_json::from_value(serde_json::to_value(e.session()).unwrap()).unwrap();
+        assert_eq!(crate::video_stereo::options(&restored, &before.path).input, soundcraft_video::stereo::Input::HalfSideBySideRight);
+        let mut other = before.clone();
+        other.id = soundcraft_model::SourceId(e.session_mut().alloc());
+        e.session_mut().videos.push(other.clone());
+        assert_eq!(e.execute("video.stereoInput", &json!({"source":other.id.0})).unwrap(), result);
+        assert_eq!(crate::video_stereo::options(e.session(), "/different.mov"), Default::default());
+    }
     #[test]
     fn offset_moves_the_picture_and_undoes() {
         let (mut e, t) = video_engine();

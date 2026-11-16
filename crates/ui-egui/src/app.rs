@@ -117,6 +117,7 @@ impl SoundApp {
             last_frame: None,
             last_meter_poll: f64::NEG_INFINITY,
             video: video_track::VideoPool::default(),
+            stereo_video: super::stereo_video::State::default(),
             bounce: None,
             imports: import::Imports::default(),
             #[cfg(test)]

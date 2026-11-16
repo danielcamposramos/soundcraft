@@ -22,6 +22,8 @@ mod logging;
 mod native_menu;
 mod switch;
 
+mod stereo_video;
+
 use env::Env;
 use soundcraft_engine::Engine;
 use soundcraft_ui_egui::{Services, SoundApp, UiState, dialogs};
@@ -147,6 +149,7 @@ fn save_prefs(env: &Env, ui: &UiState) {
 
 fn services() -> Services {
     Services {
+        stereo_video: Some(Box::new(stereo_video::Host::default())),
         pick_open: Some(Box::new(|purpose: &str, _exts: &[&str]| {
             let d = rfd::FileDialog::new();
             let d = match purpose {

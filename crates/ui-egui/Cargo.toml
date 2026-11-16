@@ -45,5 +45,6 @@ egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 workspace = true
 
 [build-dependencies]
+craft-i18n = { path = "../../../craft-libs-common/crates/i18n" }
 serde_json = { workspace = true }
 toml = "1"

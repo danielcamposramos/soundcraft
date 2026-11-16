@@ -30,6 +30,7 @@ pub mod palette;
 pub mod panels;
 pub mod preferences;
 pub mod shortcuts;
+pub mod stereo_video;
 pub mod theme;
 pub mod toolbar;
 pub mod updates_ui;
@@ -431,6 +432,7 @@ pub struct SoundApp {
     last_meter_poll: f64,
     /// Movies for the Video window and Video track (decoded in the background).
     pub video: video_track::VideoPool,
+    pub stereo_video: stereo_video::State,
     /// The Bounce Mix in progress, rendered a slice per frame.
     pub bounce: Option<soundcraft_engine::io::Bounce>,
     /// Audio files importing in the background (issue #597).

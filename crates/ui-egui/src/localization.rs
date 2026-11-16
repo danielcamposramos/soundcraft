@@ -17,17 +17,52 @@ pub enum Language {
     English,
     #[serde(rename = "pt-BR")]
     PortugueseBrazil,
+    #[serde(rename = "pl")]
+    Polish,
+    #[serde(rename = "fr")]
+    French,
+    #[serde(rename = "de")]
+    German,
+    #[serde(rename = "es")]
+    Spanish,
+    #[serde(rename = "ja")]
+    Japanese,
+    #[serde(rename = "ko")]
+    Korean,
+    #[serde(rename = "zh-CN")]
+    ChineseSimplified,
+    #[serde(rename = "zh-TW")]
+    ChineseTraditional,
 }
 
 impl Language {
     /// All supported languages, in the order they are shown in the language menu.
-    pub const ALL: [Self; 2] = [Self::English, Self::PortugueseBrazil];
+    pub const ALL: [Self; 10] = [
+        Self::English,
+        Self::PortugueseBrazil,
+        Self::Polish,
+        Self::French,
+        Self::German,
+        Self::Spanish,
+        Self::Japanese,
+        Self::Korean,
+        Self::ChineseSimplified,
+        Self::ChineseTraditional,
+    ];
 
     /// Stable language tag used in preferences and control commands.
     pub const fn id(self) -> &'static str {
         match self {
             Self::English => "en",
             Self::PortugueseBrazil => "pt-BR",
+            Self::Polish => "pl",
+            Self::French => "fr",
+            Self::German => "de",
+            Self::Spanish => "es",
+            Self::Japanese => "ja",
+            Self::Korean => "ko",
+            Self::ChineseSimplified => "zh-CN",
+            Self::ChineseTraditional => "zh-TW",
         }
     }
 
@@ -36,27 +71,45 @@ impl Language {
         match self {
             Self::English => "English",
             Self::PortugueseBrazil => "Portuguese (Brazil)",
+            Self::Polish => "Polish (stereo controls)",
+            Self::French => "French (stereo controls)",
+            Self::German => "German (stereo controls)",
+            Self::Spanish => "Spanish (stereo controls)",
+            Self::Japanese => "Japanese (stereo controls)",
+            Self::Korean => "Korean (stereo controls)",
+            Self::ChineseSimplified => "Chinese (Simplified) (stereo controls)",
+            Self::ChineseTraditional => "Chinese (Traditional) (stereo controls)",
         }
     }
 
     pub fn parse(tag: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|language| language.id().eq_ignore_ascii_case(tag.trim()))
+        let normalized = tag.trim().replace('_', "-").to_ascii_lowercase();
+        if let Some(language) = Self::ALL.into_iter().find(|language| language.id().eq_ignore_ascii_case(&normalized)) {
+            return Some(language);
+        }
+        match normalized.as_str() {
+            "zh-hans" => return Some(Self::ChineseSimplified),
+            "zh-hant" => return Some(Self::ChineseTraditional),
+            _ => {}
+        }
+        let base = normalized.split('-').next()?;
+        Self::ALL.into_iter().find(|language| !language.id().contains('-') && language.id() == base)
     }
 
     /// Rewrites the decimal point of a rendered number for this language.
     pub fn localize_decimal(self, number: &str) -> String {
         match self {
-            Self::English => number.to_owned(),
             Self::PortugueseBrazil => number.replace('.', ","),
+            _ => number.to_owned(),
         }
     }
 
     /// Translates a UI string, falling back to its English source when no translation exists.
     pub fn text(self, source: &str) -> &str {
-        match self {
-            Self::English => source,
-            Self::PortugueseBrazil => pt_br::translate(source).unwrap_or(source),
+        if self == Self::PortugueseBrazil {
+            return pt_br::translate(source).unwrap_or(source);
         }
+        STEREO.get(self.id()).and_then(|rows| rows.get(source)).map_or(source, String::as_str)
     }
 }
 
@@ -87,8 +140,8 @@ const MAX_ERROR_DEPTH: usize = 4;
 
 fn error_text_in(language: Language, message: &str, depth: usize) -> String {
     let templates: &[(&str, &str)] = match language {
-        Language::English => &[],
         Language::PortugueseBrazil => pt_br::ERROR_TEMPLATES,
+        _ => &[],
     };
     let mut best: Option<(usize, &str, Vec<(String, String)>)> = None;
     for (template, translation) in templates {
@@ -354,7 +407,11 @@ mod tests {
             assert_eq!(decoded, language);
         }
         assert_eq!(Language::parse(" PT-br "), Some(Language::PortugueseBrazil));
-        assert_eq!(Language::parse("fr"), None);
+        assert_eq!(Language::parse("xx"), None);
+        assert_eq!(Language::parse("es-MX"), Some(Language::Spanish));
+        assert_eq!(Language::parse("es_AR"), Some(Language::Spanish));
+        assert_eq!(Language::parse("zh_CN"), Some(Language::ChineseSimplified));
+        assert_eq!(Language::parse("zh-Hant"), Some(Language::ChineseTraditional));
     }
 
     #[test]
@@ -538,5 +595,32 @@ mod tests {
         let mut missing = Vec::new();
         visit(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut missing);
         assert!(missing.is_empty(), "strings without a pt-BR entry:\n{}", missing.join("\n"));
+    }
+}
+
+// The edition adds only its stereo controls in these eight additional languages.
+// The existing English/Portuguese application catalogs remain their own authority.
+static STEREO: std::sync::LazyLock<std::collections::HashMap<String, std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/stereo.json"))).unwrap_or_default());
+
+#[cfg(test)]
+mod stereo_catalog_tests {
+    use super::*;
+    #[test]
+    fn the_ten_stereo_catalogs_are_complete_and_other_ui_stays_explicitly_partial() {
+        let keys = &STEREO["en"];
+        if std::env::var("CRAFT_I18N_REQUIRED").as_deref() == Ok("1") {
+            assert_eq!(STEREO.len(), 10);
+        }
+        assert_eq!(Language::ALL.len(), 10);
+        for language in Language::ALL.into_iter().filter(|language| STEREO.contains_key(language.id())) {
+            let rows = &STEREO[language.id()];
+            assert_eq!(rows.len(), keys.len());
+            for key in keys.keys() {
+                assert!(rows.get(key).is_some_and(|v| !v.is_empty()), "{} {key}", language.id());
+            }
+            assert!(!language.text("Stereo Video").is_empty());
+        }
+        assert_eq!(Language::French.text("Untranslated ordinary UI"), "Untranslated ordinary UI");
     }
 }

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 /// paths as picked: the caller converts one to text where a command takes it ([`crate::dialogs::unicode`]).
 #[derive(Default)]
 pub struct Services {
+    pub stereo_video: Option<Box<dyn crate::stereo_video::Host>>,
     pub pick_open: Option<Box<dyn Fn(&str, &[&str]) -> Option<PathBuf>>>,
     /// Like `pick_open`, but the user may select several files (Import Audio). Empty when cancelled.
     pub pick_open_many: Option<Box<dyn Fn(&str) -> Vec<PathBuf>>>,

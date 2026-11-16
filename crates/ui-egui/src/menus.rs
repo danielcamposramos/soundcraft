@@ -10,6 +10,9 @@ use soundcraft_engine::catalog;
 
 /// UI-layer commands: (id, label, catalog path or "", shortcut).
 pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
+    ("video.stereoOptions", "Stereo Video", "Window > Stereo Video", None),
+    ("video.stereo", "Enable 3D", "", None),
+    ("video.displaySettings", "Display Settings", "", None),
     ("app.checkForUpdates", "Check for Updates…", "", None),
     ("ui.dock", "Arrange Panel", "", None),
     ("ui.dock.reset", "Reset Panel Layout", "Window > Reset Panel Layout", None),
@@ -603,6 +606,9 @@ fn wants_dialog(id: &str) -> bool {
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
 pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(result) = crate::stereo_video::command(app, id, p) {
+        return Some(result);
+    }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id, p));
     }
@@ -627,7 +633,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
                 return Some(Ok(json!({"language": app.ui.language.id()})));
             };
             let Some(language) = crate::localization::Language::parse(tag) else {
-                return Some(Err(format!("unknown language `{tag}` (en or pt-BR)")));
+                return Some(Err(format!("unknown language `{tag}`")));
             };
             app.ui.language = language;
             json!({"language": language.id()})

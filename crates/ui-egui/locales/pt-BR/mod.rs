@@ -335,7 +335,7 @@ pub(super) fn translate(source: &str) -> Option<&'static str> {
         "32-bit float" => "32 bits (ponto flutuante)",
         "clip" => "clipe",
         "file" => "arquivo",
-        _ => return menu_translate(source),
+        _ => return menu_translate(source).or_else(|| super::STEREO.get("pt-BR").and_then(|rows| rows.get(source)).map(String::as_str)),
     })
 }
 
