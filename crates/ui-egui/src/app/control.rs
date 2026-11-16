@@ -138,7 +138,7 @@ impl SoundApp {
             "dialog": self.dialogs.open_name(),
             "frame_ms": self.frame_ms,
             "stereo_video": self.stereo_video.inspect(),
-            "audio_clock": self.player.as_ref().map(|p| json!({"silent":p.silent,"rate":p.device_rate,"channels":p.device_channels,"position":p.position()})),
+            "audio_clock": self.player.as_ref().map(|p| json!({"silent":p.silent,"rate":self.engine.session().sample_rate.hz(),"device_rate":p.device_rate,"channels":p.device_channels,"position":p.position()})),
             "audio_device": self.player.as_ref().map(|p| p.device_name.clone()),
             "status": self.ui.status,
         })
