@@ -111,11 +111,28 @@ pub fn frame_color(i: usize) -> [u8; 3] {
 /// H.264 MP4 of `mb_w` × `mb_h` macroblocks, `n` frames at `fps` (integer), an IDR picture every
 /// `gop` frames; `color(frame, mb_x, mb_y)` gives each macroblock's Y'CbCr.
 pub fn h264_mp4_with(n: usize, gop: usize, mb_w: usize, mb_h: usize, fps: u32, color: &dyn Fn(usize, usize, usize) -> [u8; 3]) -> Result<Vec<u8>> {
+    h264_mp4_marked(n, gop, mb_w, mb_h, fps, None, color)
+}
+
+/// The same exact I_PCM fixture with a container st3d declaration.
+#[allow(clippy::too_many_arguments)]
+pub fn h264_mp4_marked(
+    n: usize,
+    gop: usize,
+    mb_w: usize,
+    mb_h: usize,
+    fps: u32,
+    stereo_mode: Option<u8>,
+    color: &dyn Fn(usize, usize, usize) -> [u8; 3],
+) -> Result<Vec<u8>> {
     let (mb_w, mb_h) = (mb_w.clamp(1, 120), mb_h.clamp(1, 68));
     let fps = fps.clamp(1, 240);
     let avcc = AvcConfig::new(vec![sps(mb_w, mb_h)], vec![pps()], 4);
     let mut mw = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).map_err(err)?;
-    let entry = SampleEntry::avc(avcc, (mb_w * 16) as u16, (mb_h * 16) as u16);
+    let mut entry = SampleEntry::avc(avcc, (mb_w * 16) as u16, (mb_h * 16) as u16);
+    if let Some(video) = &mut entry.video {
+        video.stereo_mode = stereo_mode;
+    }
     let t = mw.add_track(TrackConfig::new(entry, fps * 100)).map_err(err)?;
     let mut frame_num = 0;
     for i in 0..n.min(100_000) {

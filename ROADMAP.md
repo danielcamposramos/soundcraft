@@ -216,3 +216,8 @@ mutated and truncated movies. Field reports from the first public week are track
 | 2026-10-10 | major | Progress docs restructured: stage alpha (re-normalized the same day), two numbers (breadth ~70 %, ready ~40 %), dimension/feature/language tables, hours re-calibrated; area table moved to docs/target-app-parity.md, milestones to docs/roadmap.md |
 | 2026-10-07 | major | Menu parity 94 %, ~65 % estimated feature parity, alpha list |
 | 2026-10-06 | minor | Alpha and parity estimates |
+
+## Native video picture metadata
+
+[The stereo picture boundary](docs/stereo-pictures.md) retains native samples, per-picture MP4 descriptions and presentation identity without a desktop dependency.
+The existing Video interface and parity estimates are unchanged.

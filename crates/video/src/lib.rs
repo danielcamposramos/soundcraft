@@ -23,6 +23,7 @@
 
 pub mod convert;
 mod movie;
+pub mod stereo;
 pub mod synth;
 
 pub use craft_media::{bitstream, isobmff};

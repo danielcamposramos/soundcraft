@@ -16,7 +16,7 @@ fn expected_rgb(i: usize) -> [u8; 3] {
 }
 
 fn assert_solid(f: &crate::Frame, rgb: [u8; 3], tol: i32) {
-    assert_eq!(f.rgba.len(), (f.width * f.height * 4) as usize);
+    assert_eq!(f.rgba.as_ref().len(), (f.width * f.height * 4) as usize);
     for px in f.rgba.as_chunks::<4>().0.iter().step_by(37) {
         for c in 0..3 {
             assert!((i32::from(px[c]) - i32::from(rgb[c])).abs() <= tol, "frame {} pixel {:?} expected {:?}", f.index, px, rgb);
@@ -313,11 +313,11 @@ fn ffmpeg_h264_high_with_bframes() {
     assert_eq!((m.info().width, m.info().height), (160, 96));
     assert_eq!(m.info().frame_count, 48);
     // Sequential frames must equal frames decoded after random seeks (decoder state independence).
-    let seq: Vec<Vec<u8>> = (0..48).map(|i| m.frame(i).unwrap().rgba.clone()).collect();
+    let seq: Vec<Vec<u8>> = (0..48).map(|i| m.frame(i).unwrap().rgba.to_vec()).collect();
     let mut r = Movie::open(bytes).unwrap();
     r.set_cache_frames(1);
     for &i in &[47usize, 13, 0, 25, 24, 11, 36, 2] {
-        assert!(r.frame(i).unwrap().rgba == seq[i], "frame {i} differs after a seek");
+        assert!(r.frame(i).unwrap().rgba.as_ref() == seq[i].as_slice(), "frame {i} differs after a seek");
     }
     // testsrc2 frames differ from each other.
     assert!(seq[0] != seq[1]);
@@ -344,4 +344,103 @@ fn test_pattern_moves() {
     assert_eq!(white_x(&f3), Some(3));
     let f17 = m.frame_at(17.5 / 24.0).unwrap();
     assert_eq!(white_x(&f17), Some(17));
+}
+
+#[test]
+fn stereo_container_mark_survives_movie_probe() {
+    let mut entry = SampleEntry::jpeg(64, 24);
+    entry.video.as_mut().unwrap().stereo_mode = Some(2);
+    let mut writer = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+    let track = writer.add_track(TrackConfig::new(entry, 24)).unwrap();
+    let image = image::RgbImage::from_pixel(64, 24, image::Rgb([100u8, 80, 60]));
+    let mut data = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut data).encode_image(&image).unwrap();
+    writer.write_sample(track, WriteSample { data: &data, duration: 1, composition_offset: 0, is_sync: true }).unwrap();
+    let mut movie = Movie::open(writer.finish().unwrap().into_inner()).unwrap();
+    assert!(format!("{:?}", movie.info()).contains("stereo_mode: Some(2)"), "MovieInfo dropped the st3d mark: {:?}", movie.info());
+    let frame = movie.frame(0).unwrap();
+    let view = crate::stereo::view(&frame, movie.info(), crate::stereo::Input::Auto, false, frame.rgba.as_ref().len()).unwrap();
+    assert!(view.stereo && std::sync::Arc::ptr_eq(&frame.rgba, &view.rgba));
+}
+
+#[test]
+fn stereo_pair_keeps_native_samples_and_single_picture_identity() {
+    use crate::stereo::{Input, view};
+    let movie = Movie::open(h264_mp4(1, 1).unwrap()).unwrap();
+    let info = movie.info();
+    let f = crate::Frame {
+        width: 4,
+        height: 2,
+        rgba: (0..8).flat_map(|v| [v, v + 20, v + 40, 255]).collect(),
+        index: 7,
+        time: 0.35,
+        sample_aspect: (1, 1),
+        stereo_mode: None,
+    };
+    let pair = view(&f, info, Input::TopBottom, false, 32).unwrap();
+    assert_eq!((pair.width, pair.height, pair.index, pair.time), (8, 1, 7, 0.35));
+    assert_eq!(pair.rgba.as_ref(), f.rgba.as_ref());
+    let swapped = view(&f, info, Input::TopBottom, true, 32).unwrap();
+    assert_eq!(&swapped.rgba[..16], &f.rgba[16..]);
+    assert_eq!(&swapped.rgba[16..], &f.rgba[..16]);
+    let half = view(&f, info, Input::HalfSideBySide, false, 32).unwrap();
+    assert_eq!((half.width, half.height, half.sample_aspect), (4, 2, (2, 1)));
+    assert_eq!(half.rgba.as_ref(), f.rgba.as_ref());
+    assert!(view(&f, info, Input::Rows, false, 31).is_err());
+    assert!(view(&f, info, Input::Auto, true, 32).is_err(), "H.264 auto must not prefer a container mark over unhandled codec metadata");
+    let mono = view(&f, info, Input::Mono, true, 32).unwrap();
+    assert!(!mono.stereo);
+    assert_eq!(mono.rgba.as_ref(), f.rgba.as_ref());
+}
+
+#[test]
+fn stereo_preserves_decoded_sample_aspect_without_resampling() {
+    use crate::stereo::{Input, view};
+    let mut movie = Movie::open(h264_mp4(1, 1).unwrap()).unwrap();
+    let mut frame = movie.frame(0).unwrap().as_ref().clone();
+    frame.sample_aspect = (4, 3);
+    let actual = view(&frame, movie.info(), Input::SideBySide, false, frame.rgba.as_ref().len()).unwrap();
+    assert_eq!(actual.sample_aspect, (4, 3));
+    assert!(std::sync::Arc::ptr_eq(&frame.rgba, &actual.rgba));
+    assert_eq!(actual.rgba.as_ref(), frame.rgba.as_ref());
+    assert_eq!(frame.fit(16, 16).sample_aspect, (4, 3));
+    frame.sample_aspect = (0, 1);
+    assert!(view(&frame, movie.info(), Input::Mono, false, frame.rgba.as_ref().len()).is_err());
+}
+
+#[test]
+fn invalid_declared_sample_aspect_is_not_silently_replaced() {
+    let mut entry = SampleEntry::jpeg(64, 24);
+    let video = entry.video.as_mut().unwrap();
+    video.stereo_mode = Some(2);
+    video.pixel_aspect = Some((0, 1));
+    let mut writer = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+    let track = writer.add_track(TrackConfig::new(entry, 24)).unwrap();
+    let image = image::RgbImage::from_pixel(64, 24, image::Rgb([100u8, 80, 60]));
+    let mut data = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut data).encode_image(&image).unwrap();
+    writer.write_sample(track, WriteSample { data: &data, duration: 1, composition_offset: 0, is_sync: true }).unwrap();
+    let mut movie = Movie::open(writer.finish().unwrap().into_inner()).unwrap();
+    let frame = movie.frame(0).unwrap();
+    assert_eq!(movie.info().sample_aspect, (0, 1));
+    assert_eq!(frame.sample_aspect, (0, 1));
+    let error = crate::stereo::view(&frame, movie.info(), crate::stereo::Input::Auto, false, frame.rgba.as_ref().len()).unwrap_err();
+    assert!(error.to_string().contains("sample aspect ratio is invalid"));
+}
+
+#[test]
+fn half_packing_reduces_the_aspect_before_multiplying() {
+    use crate::stereo::{Input, view};
+    let mut movie = Movie::open(h264_mp4(1, 1).unwrap()).unwrap();
+    let mut frame = movie.frame(0).unwrap().as_ref().clone();
+    frame.sample_aspect = (u32::MAX, 2);
+    let sbs = view(&frame, movie.info(), Input::HalfSideBySide, false, frame.rgba.as_ref().len()).unwrap();
+    assert_eq!(sbs.sample_aspect, (u32::MAX, 1));
+    assert!(std::sync::Arc::ptr_eq(&frame.rgba, &sbs.rgba));
+    frame.sample_aspect = (2, u32::MAX);
+    let tab = view(&frame, movie.info(), Input::HalfTopBottom, false, frame.rgba.as_ref().len()).unwrap();
+    assert_eq!(tab.sample_aspect, (1, u32::MAX));
+    assert_eq!(tab.rgba.as_ref().len(), frame.rgba.as_ref().len());
+    frame.sample_aspect = (u32::MAX, 1);
+    assert!(view(&frame, movie.info(), Input::HalfSideBySide, false, frame.rgba.as_ref().len()).is_err());
 }

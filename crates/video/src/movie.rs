@@ -17,7 +17,11 @@ pub(crate) const MAX_PIXELS: u64 = 8192 * 8192;
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    pub rgba: Vec<u8>,
+    pub rgba: Arc<[u8]>,
+    /// Exact source sample shape, container pasp first, decoded H.264 VUI otherwise.
+    pub sample_aspect: (u32, u32),
+    /// st3d of this presentation sample’s selected description, not a stale first-frame mark.
+    pub stereo_mode: Option<u8>,
     /// Presentation index (0-based, in display order).
     pub index: usize,
     /// Presentation time in seconds from the start of the movie.
@@ -34,9 +38,11 @@ impl Frame {
         Frame {
             width: w,
             height: h,
-            rgba: scale_rgba(&self.rgba, self.width as usize, self.height as usize, w as usize, h as usize),
+            rgba: scale_rgba(&self.rgba, self.width as usize, self.height as usize, w as usize, h as usize).into(),
             index: self.index,
             time: self.time,
+            sample_aspect: self.sample_aspect,
+            stereo_mode: self.stereo_mode,
         }
     }
 }
@@ -58,6 +64,10 @@ pub struct MovieInfo {
     pub height: u32,
     /// Pixel aspect ratio (1.0 = square pixels).
     pub pixel_aspect: f64,
+    /// Exact source pixel aspect; no resampling is done for stereo delivery.
+    pub sample_aspect: (u32, u32),
+    /// MP4 st3d mode, retained even when reconstruction is unsupported.
+    pub stereo_mode: Option<u8>,
     /// Length of the picture track in seconds.
     pub duration: f64,
     /// Nominal frame rate (frames per second).
@@ -261,6 +271,8 @@ impl Movie {
             width,
             height,
             pixel_aspect,
+            sample_aspect: vp.and_then(|v| v.pixel_aspect).unwrap_or((1, 1)),
+            stereo_mode: vp.and_then(|v| v.stereo_mode),
             duration,
             frame_rate,
             frame_count: n,
@@ -415,7 +427,15 @@ impl Movie {
                 let cx = if cw < w { 2 } else { 1 };
                 let m = Matrix::for_code(f.color.matrix, f.height, false);
                 let rgba = planar_to_rgba(&Planes { width: w, height: h, y: &y, y_stride: w, u: &u, v: &v, uv_stride: cw, cx, cy: 1 }, &m);
-                Ok(Frame { width: f.width, height: f.height, rgba, index, time })
+                Ok(Frame {
+                    width: f.width,
+                    height: f.height,
+                    rgba: rgba.into(),
+                    index,
+                    time,
+                    sample_aspect: self.frame_video(index).and_then(|v| v.pixel_aspect).unwrap_or((1, 1)),
+                    stereo_mode: self.frame_video(index).and_then(|v| v.stereo_mode),
+                })
             }
             Codec::Jpeg => {
                 // The frame's own size, from its header, before a pixel is decoded: a frame may differ from
@@ -431,10 +451,24 @@ impl Movie {
                 if u64::from(width) * u64::from(height) > MAX_PIXELS {
                     return Err(VideoError::Decode("picture too large".into()));
                 }
-                Ok(Frame { width, height, rgba: rgba.into_raw(), index, time })
+                Ok(Frame {
+                    width,
+                    height,
+                    rgba: rgba.into_raw().into(),
+                    index,
+                    time,
+                    sample_aspect: self.frame_video(index).and_then(|v| v.pixel_aspect).unwrap_or((1, 1)),
+                    stereo_mode: self.frame_video(index).and_then(|v| v.stereo_mode),
+                })
             }
             _ => Err(VideoError::Unsupported("not an intra-frame codec".into())),
         }
+    }
+
+    fn frame_video(&self, index: usize) -> Option<&crate::isobmff::VideoParams> {
+        let track = self.mp4.tracks.get(self.track)?;
+        let sample = track.samples.get(*self.order.get(index)?)?;
+        track.entries.get(sample.description_index.checked_sub(1)? as usize)?.video.as_ref()
     }
 
     fn h264_to_frame(&self, p: &crate::h264::Picture, index: usize) -> Frame {
@@ -453,7 +487,19 @@ impl Movie {
             },
             &m,
         );
-        Frame { width: p.width, height: p.height, rgba, index, time: self.times.get(index).copied().unwrap_or(0.0) }
+        Frame {
+            width: p.width,
+            height: p.height,
+            rgba: rgba.into(),
+            index,
+            time: self.times.get(index).copied().unwrap_or(0.0),
+            stereo_mode: self.frame_video(index).and_then(|v| v.stereo_mode),
+            sample_aspect: self
+                .frame_video(index)
+                .and_then(|v| v.pixel_aspect)
+                .or_else(|| (p.sar.0 > 0 && p.sar.1 > 0).then_some((u32::from(p.sar.0), u32::from(p.sar.1))))
+                .unwrap_or((1, 1)),
+        }
     }
 
     /// Decode one sample with a fresh decoder (keyframe thumbnails).
@@ -561,5 +607,26 @@ impl Movie {
             }
         }
         Err(VideoError::Decode(last_err.unwrap_or_else(|| format!("frame {index} was not produced"))))
+    }
+}
+
+#[cfg(test)]
+mod stereo_description_tests {
+    use super::*;
+    #[test]
+    fn each_presentation_picture_keeps_its_own_sample_description() {
+        let mut movie = Movie::open(crate::synth::mjpeg_mov(2).unwrap()).unwrap();
+        let track = &mut movie.mp4.tracks[movie.track];
+        track.entries[0].video.as_mut().unwrap().stereo_mode = Some(2);
+        let mut second = track.entries[0].clone();
+        second.video.as_mut().unwrap().stereo_mode = Some(1);
+        track.entries.push(second);
+        track.samples[1].description_index = 2;
+        let first = movie.frame(0).unwrap();
+        let second = movie.frame(1).unwrap();
+        assert_eq!((first.index, first.stereo_mode, second.index, second.stereo_mode), (0, Some(2), 1, Some(1)));
+        let pair = crate::stereo::view(&second, movie.info(), crate::stereo::Input::Auto, false, second.rgba.as_ref().len()).unwrap();
+        assert_eq!((pair.width, pair.height, pair.index), (64, 12, 1));
+        assert_eq!(second.fit(16, 16).stereo_mode, Some(1));
     }
 }
