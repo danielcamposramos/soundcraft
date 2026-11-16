@@ -130,10 +130,18 @@ pub fn view(frame: &Frame, info: &MovieInfo, input: Input, swap: bool, budget: u
         Input::CheckerboardRight => (Packing::Checkerboard, Eye::Right),
     };
     if matches!(input, Input::HalfSideBySide | Input::HalfSideBySideRight) {
-        aspect.0 = aspect.0.checked_mul(2).ok_or_else(|| err("The sample aspect ratio is too large."))?;
+        if aspect.1.is_multiple_of(2) {
+            aspect.1 /= 2;
+        } else {
+            aspect.0 = aspect.0.checked_mul(2).ok_or_else(|| err("The sample aspect ratio is too large."))?;
+        }
     }
     if matches!(input, Input::HalfTopBottom | Input::HalfTopBottomRight) {
-        aspect.1 = aspect.1.checked_mul(2).ok_or_else(|| err("The sample aspect ratio is too large."))?;
+        if aspect.0.is_multiple_of(2) {
+            aspect.0 /= 2;
+        } else {
+            aspect.1 = aspect.1.checked_mul(2).ok_or_else(|| err("The sample aspect ratio is too large."))?;
+        }
     }
     if swap {
         first = if first == Eye::Left { Eye::Right } else { Eye::Left };

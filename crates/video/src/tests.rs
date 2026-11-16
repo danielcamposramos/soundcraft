@@ -407,3 +407,40 @@ fn stereo_preserves_decoded_sample_aspect_without_resampling() {
     frame.sample_aspect = (0, 1);
     assert!(view(&frame, movie.info(), Input::Mono, false, frame.rgba.as_ref().len()).is_err());
 }
+
+#[test]
+fn invalid_declared_sample_aspect_is_not_silently_replaced() {
+    let mut entry = SampleEntry::jpeg(64, 24);
+    let video = entry.video.as_mut().unwrap();
+    video.stereo_mode = Some(2);
+    video.pixel_aspect = Some((0, 1));
+    let mut writer = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+    let track = writer.add_track(TrackConfig::new(entry, 24)).unwrap();
+    let image = image::RgbImage::from_pixel(64, 24, image::Rgb([100u8, 80, 60]));
+    let mut data = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut data).encode_image(&image).unwrap();
+    writer.write_sample(track, WriteSample { data: &data, duration: 1, composition_offset: 0, is_sync: true }).unwrap();
+    let mut movie = Movie::open(writer.finish().unwrap().into_inner()).unwrap();
+    let frame = movie.frame(0).unwrap();
+    assert_eq!(movie.info().sample_aspect, (0, 1));
+    assert_eq!(frame.sample_aspect, (0, 1));
+    let error = crate::stereo::view(&frame, movie.info(), crate::stereo::Input::Auto, false, frame.rgba.as_ref().len()).unwrap_err();
+    assert!(error.to_string().contains("sample aspect ratio is invalid"));
+}
+
+#[test]
+fn half_packing_reduces_the_aspect_before_multiplying() {
+    use crate::stereo::{Input, view};
+    let mut movie = Movie::open(h264_mp4(1, 1).unwrap()).unwrap();
+    let mut frame = movie.frame(0).unwrap().as_ref().clone();
+    frame.sample_aspect = (u32::MAX, 2);
+    let sbs = view(&frame, movie.info(), Input::HalfSideBySide, false, frame.rgba.as_ref().len()).unwrap();
+    assert_eq!(sbs.sample_aspect, (u32::MAX, 1));
+    assert!(std::sync::Arc::ptr_eq(&frame.rgba, &sbs.rgba));
+    frame.sample_aspect = (2, u32::MAX);
+    let tab = view(&frame, movie.info(), Input::HalfTopBottom, false, frame.rgba.as_ref().len()).unwrap();
+    assert_eq!(tab.sample_aspect, (1, u32::MAX));
+    assert_eq!(tab.rgba.as_ref().len(), frame.rgba.as_ref().len());
+    frame.sample_aspect = (u32::MAX, 1);
+    assert!(view(&frame, movie.info(), Input::HalfSideBySide, false, frame.rgba.as_ref().len()).is_err());
+}

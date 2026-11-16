@@ -271,7 +271,7 @@ impl Movie {
             width,
             height,
             pixel_aspect,
-            sample_aspect: vp.and_then(|v| v.pixel_aspect).filter(|&(n, d)| n > 0 && d > 0).unwrap_or((1, 1)),
+            sample_aspect: vp.and_then(|v| v.pixel_aspect).unwrap_or((1, 1)),
             stereo_mode: vp.and_then(|v| v.stereo_mode),
             duration,
             frame_rate,
@@ -433,7 +433,7 @@ impl Movie {
                     rgba: rgba.into(),
                     index,
                     time,
-                    sample_aspect: self.frame_video(index).and_then(|v| v.pixel_aspect).filter(|&(n, d)| n > 0 && d > 0).unwrap_or((1, 1)),
+                    sample_aspect: self.frame_video(index).and_then(|v| v.pixel_aspect).unwrap_or((1, 1)),
                     stereo_mode: self.frame_video(index).and_then(|v| v.stereo_mode),
                 })
             }
@@ -457,7 +457,7 @@ impl Movie {
                     rgba: rgba.into_raw().into(),
                     index,
                     time,
-                    sample_aspect: self.frame_video(index).and_then(|v| v.pixel_aspect).filter(|&(n, d)| n > 0 && d > 0).unwrap_or((1, 1)),
+                    sample_aspect: self.frame_video(index).and_then(|v| v.pixel_aspect).unwrap_or((1, 1)),
                     stereo_mode: self.frame_video(index).and_then(|v| v.stereo_mode),
                 })
             }
@@ -497,7 +497,6 @@ impl Movie {
             sample_aspect: self
                 .frame_video(index)
                 .and_then(|v| v.pixel_aspect)
-                .filter(|&(n, d)| n > 0 && d > 0)
                 .or_else(|| (p.sar.0 > 0 && p.sar.1 > 0).then_some((u32::from(p.sar.0), u32::from(p.sar.1))))
                 .unwrap_or((1, 1)),
         }
