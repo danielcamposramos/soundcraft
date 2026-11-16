@@ -22,6 +22,9 @@ A custom or unknown st3d arrangement is refused until its actual input packing i
 Codec SEI, temporal/interlaced pairing, multiview codecs and shape detection are not implemented by this adapter's automatic reader.
 The controls state this coverage; choose the input packing for spatial pictures carrying other marks.
 The shared sample copier owns side-by-side, top-and-bottom, rows, columns and checkerboard grids; the adapter performs no eye resampling.
+SoundCraft reads the encoded picture’s sample aspect from MP4 pasp or H.264 VUI.
+Compacting alternate rows halves that aspect; compacting columns or checkerboard samples doubles it, preserving the original picture’s display shape without resizing samples.
+This interpretation belongs at this raw-metadata boundary; an aspect already describing a compacted eye must not be corrected again.
 Timecode burn-in remains an ordinary Video-window overlay.
 
 The existing English and Brazilian Portuguese application catalogs remain authoritative.
