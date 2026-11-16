@@ -274,6 +274,7 @@ enum Slot {
     /// Requested at this UI time (seconds).
     Pending(f64),
     Ready(egui::TextureHandle),
+    Decoded(Arc<Frame>),
     Failed,
 }
 
@@ -288,6 +289,7 @@ pub struct VideoPool {
     current: Option<(MovieKey, usize, egui::TextureHandle)>,
     current_err: Option<(MovieKey, String)>,
     native: Option<(MovieKey, f64, Arc<Frame>)>,
+    pending_frame: Option<(MovieKey, Arc<Frame>)>,
     /// Last frame request (to avoid re-sending identical requests).
     last_req: Option<(MovieKey, i64)>,
     /// Pictures shown in the Video window since start (diagnostics).
@@ -303,8 +305,32 @@ impl VideoPool {
         self.backend.as_mut()
     }
 
-    /// Collect finished work (call once per frame before drawing).
+    /// Collect finished work and upload textures only when the ordinary UI paints.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        if let Some((key, frame)) = self.pending_frame.take() {
+            self.upload_frame(ctx, key, &frame);
+        }
+        self.collect(ctx, true);
+    }
+
+    /// Logic-only playback keeps one latest pending picture and no per-frame UI texture deltas.
+    pub fn poll_native(&mut self, ctx: &egui::Context) {
+        self.collect(ctx, false);
+    }
+
+    fn upload_frame(&mut self, ctx: &egui::Context, key: MovieKey, frame: &Frame) {
+        let img = color_image(frame);
+        match &mut self.current {
+            Some((ck, ci, tex)) => {
+                tex.set(img, egui::TextureOptions::LINEAR);
+                *ck = key;
+                *ci = frame.index;
+            }
+            None => self.current = Some((key, frame.index, ctx.load_texture("video-frame", img, egui::TextureOptions::LINEAR))),
+        }
+    }
+
+    fn collect(&mut self, ctx: &egui::Context, upload: bool) {
         let Some(b) = self.backend.as_mut() else { return };
         let done = b.poll();
         let queued: std::collections::HashSet<ThumbKey> = b.queued_thumbs().into_iter().collect();
@@ -315,14 +341,10 @@ impl VideoPool {
                 }
                 Done::Frame(k, secs, r) => match r {
                     Ok(f) => {
-                        let img = color_image(&f);
-                        match &mut self.current {
-                            Some((ck, ci, tex)) => {
-                                tex.set(img, egui::TextureOptions::LINEAR);
-                                *ck = k;
-                                *ci = f.index;
-                            }
-                            None => self.current = Some((k, f.index, ctx.load_texture("video-frame", img, egui::TextureOptions::LINEAR))),
+                        if upload {
+                            self.upload_frame(ctx, k, &f);
+                        } else {
+                            self.pending_frame = Some((k, Arc::clone(&f)));
                         }
                         self.native = Some((k, secs, f));
                         self.current_err = None;
@@ -332,7 +354,10 @@ impl VideoPool {
                 },
                 Done::Thumb(tk, r) => {
                     let slot = match r {
-                        Ok(f) => Slot::Ready(ctx.load_texture(format!("video-thumb-{tk:?}"), color_image(&f), egui::TextureOptions::LINEAR)),
+                        Ok(f) if upload => {
+                            Slot::Ready(ctx.load_texture(format!("video-thumb-{tk:?}"), color_image(&f), egui::TextureOptions::LINEAR))
+                        }
+                        Ok(f) => Slot::Decoded(f),
                         Err(_) => Slot::Failed,
                     };
                     self.thumbs.insert(tk, slot);
@@ -384,6 +409,11 @@ impl VideoPool {
         let tk = (key, (secs * 1000.0).round() as i64, h);
         match self.thumbs.get(&tk) {
             Some(Slot::Ready(t)) => return Some(t.clone()),
+            Some(Slot::Decoded(frame)) => {
+                let tex = ctx.load_texture(format!("video-thumb-{tk:?}"), color_image(frame), egui::TextureOptions::LINEAR);
+                self.thumbs.insert(tk, Slot::Ready(tex.clone()));
+                return Some(tex);
+            }
             Some(Slot::Pending(_) | Slot::Failed) => return None,
             None => {}
         }

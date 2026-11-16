@@ -10,7 +10,7 @@ use soundcraft_model::{ClipContent, TrackKind};
 use soundcraft_time::TimeFormat;
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
-    crate::stereo_video::step(app, ctx);
+    crate::stereo_video::show_options(app, ctx);
     if app.ui.show_video {
         video(app, ctx);
     }

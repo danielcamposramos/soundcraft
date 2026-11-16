@@ -3,6 +3,7 @@
 Window > Stereo Video opens the controls for a companion Video window.
 Enable 3D follows the same audio playhead, clip offset and Video Sync Offset as the ordinary Video window.
 The native player owns that playhead; the companion has no clock of its own.
+The companion advances on logic-only ticks when the main editor is minimized or covered, without queuing UI texture uploads for every hidden frame.
 Each completed decode supplies the entire spatial pair with one presentation index and timestamp.
 A seek, clip change or error never combines different decoder jobs into a pair.
 

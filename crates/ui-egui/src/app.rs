@@ -214,11 +214,12 @@ impl SoundApp {
         {
             self.ensure_input();
         }
+        crate::stereo_video::step(self, ctx);
         // Autosave and the macOS menu bar only run on frames, and plugin editors are native windows egui never hears from.
         // egui 0.37 schedules the delay as given (it no longer subtracts the predicted frame time),
         // so ask for the real interval instead of adding that time back.
         let editors = self.player.as_ref().is_some_and(Player::any_editor_open);
-        ctx.request_repaint_after_secs(if editors { 0.03 } else { 1.0 });
+        ctx.request_repaint_after_secs(if editors || (self.stereo_video.enabled && self.is_playing()) { 0.03 } else { 1.0 });
         crate::control::drain_screenshots(self, ctx);
         if crate::control::screenshots_need_paint(self) {
             // An admitted capture that has not reached a UI pass needs an explicit hidden paint;

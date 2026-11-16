@@ -90,7 +90,7 @@ impl State {
             self.clear_error(app);
             return Ok(());
         }
-        app.video.poll(ctx);
+        app.video.poll_native(ctx);
         app.video.request_frame(ctx, key, &path, secs, fps);
         if let Some(error) = app.video.current_error(key) {
             self.close(host);
@@ -127,13 +127,15 @@ impl State {
             swap: options.swap,
         };
         host.show(picture)?;
-        let notice = host.notice().map(str::to_owned).or_else(|| {
+        let notice = host.notice().filter(|_| shown.stereo).map(str::to_owned).or_else(|| {
             (options.input == Input::Auto && frame.stereo_mode.is_none())
                 .then(|| text("Automatic packing reads MP4 st3d. Choose the packing for other marks.").to_owned())
         });
         if notice != self.notice {
             if let Some(notice) = &notice {
                 app.ui.status = notice.clone();
+            } else if self.notice.as_ref().is_some_and(|previous| *previous == app.ui.status) {
+                app.ui.status.clear();
             }
             self.notice = notice;
         }
@@ -152,7 +154,17 @@ pub fn command(app: &mut SoundApp, id: &str, params: &Value) -> Option<Result<Va
             Ok(json!({}))
         }
         "video.stereo" => {
-            let enabled = params.get("enabled").and_then(Value::as_bool).unwrap_or(!app.stereo_video.enabled);
+            let enabled = match params.get("enabled") {
+                Some(value) => match serde_json::from_value::<bool>(value.clone()) {
+                    Ok(enabled) => enabled,
+                    Err(error) => {
+                        let error = error.to_string();
+                        app.ui.status = error.clone();
+                        return Some(Err(error));
+                    }
+                },
+                None => !app.stereo_video.enabled,
+            };
             if enabled && app.services.stereo_video.is_none() {
                 let error = text("This host has no stereo video window.").to_owned();
                 app.ui.status = error.clone();
@@ -187,6 +199,11 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
         }
         app.services.stereo_video = Some(host);
     }
+    app.stereo_video = state;
+}
+
+pub fn show_options(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut state = std::mem::take(&mut app.stereo_video);
     let actions = options(app, ctx, &mut state);
     app.stereo_video = state;
     for (command, params) in actions {
@@ -268,10 +285,13 @@ mod tests {
         fn display_settings(&mut self) -> Result<(), String> {
             Ok(())
         }
+        fn notice(&self) -> Option<&str> {
+            Some("The desktop has no stereo declaration; showing the left eye only.")
+        }
     }
 
     fn tick(app: &mut SoundApp, ctx: &egui::Context) {
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| step(app, ui.ctx()));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx()));
         output.textures_delta.clear();
     }
 
@@ -410,5 +430,81 @@ mod tests {
         h.state_mut().1.shown.as_mut().unwrap().source = source.0 + 1;
         h.step();
         assert!(h.query_by_label("Swap left and right eyes").is_none());
+    }
+
+    #[test]
+    fn minimized_logic_keeps_native_video_live_without_ui_texture_uploads() {
+        let path = std::env::temp_dir().join(format!("soundcraft-stereo-hidden-{}.mp4", std::process::id()));
+        let data = soundcraft_video::synth::h264_mp4_marked(12, 12, 4, 3, 24, Some(2), &|i, x, _| {
+            [if x < 2 { 30 + i as u8 * 8 } else { 200 - i as u8 * 5 }, 128, 128]
+        })
+        .unwrap();
+        std::fs::write(&path, &data).unwrap();
+        let pictures = Rc::new(RefCell::new(Vec::new()));
+        let open = Rc::new(Cell::new(false));
+        let services =
+            Services { stereo_video: Some(Box::new(RecordingHost { pictures: pictures.clone(), open: open.clone() })), ..Default::default() };
+        let mut app = SoundApp::new(Default::default(), None, services);
+        app.run("file.import_video", json!({"path":path})).unwrap();
+        let source = app.engine.session().videos[0].id;
+        app.run("video.stereoInput", json!({"source":source.0,"input":"side-by-side"})).unwrap();
+        app.run("video.stereo", json!({"enabled":true})).unwrap();
+        let ctx = egui::Context::default();
+        let hidden = egui::ViewportInfo { minimized: Some(true), ..Default::default() };
+        let raw = egui::RawInput { viewports: [(egui::ViewportId::ROOT, hidden)].into_iter().collect(), ..Default::default() };
+        let rate = i64::from(app.engine.session().sample_rate.hz());
+        app.engine.transport.playing = true;
+        let key = MovieKey::new(source, path.to_str().unwrap());
+        for index in [0usize, 5, 9] {
+            app.engine.transport.position = rate * index as i64 / 24 + 1;
+            let start = Instant::now();
+            loop {
+                let _ = ctx.run_logic(&raw, |ctx| app.logic(ctx));
+                if app.stereo_video.shown.as_ref().is_some_and(|shown| shown.index == index) {
+                    break;
+                }
+                assert!(start.elapsed() < Duration::from_secs(10), "hidden logic did not deliver frame {index}: {:?}", app.stereo_video.inspect());
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(pictures.borrow().last().unwrap().index, index);
+            assert!(app.video.current(key).is_none(), "hidden playback uploaded a UI texture");
+        }
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| app.video.poll(ui.ctx()));
+        out.textures_delta.clear();
+        assert!(app.video.current(key).is_some(), "ordinary painting did not upload the latest native picture");
+        assert_eq!(std::fs::read(&path).unwrap(), data);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_flat_picture_never_reports_a_left_eye_fallback() {
+        let path = std::env::temp_dir().join(format!("soundcraft-stereo-mono-{}.mp4", std::process::id()));
+        let data = soundcraft_video::synth::h264_mp4_marked(1, 1, 4, 3, 24, Some(2), &|_, _, _| [80, 128, 128]).unwrap();
+        std::fs::write(&path, data).unwrap();
+        let pictures = Rc::new(RefCell::new(Vec::new()));
+        let services = Services { stereo_video: Some(Box::new(RecordingHost { pictures, open: Rc::new(Cell::new(false)) })), ..Default::default() };
+        let mut app = SoundApp::new(Default::default(), None, services);
+        app.run("file.import_video", json!({"path":path})).unwrap();
+        let source = app.engine.session().videos[0].id.0;
+        app.run("video.stereoInput", json!({"source":source,"input":"mono"})).unwrap();
+        app.run("video.stereo", json!({"enabled":true})).unwrap();
+        wait_frame(&mut app, &egui::Context::default(), 0);
+        assert!(!app.stereo_video.shown.as_ref().unwrap().stereo);
+        assert!(app.stereo_video.notice.is_none(), "a single flat picture has no left-eye fallback");
+        assert_ne!(app.ui.status, "The desktop has no stereo declaration; showing the left eye only.");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn an_explicit_non_boolean_enable_never_toggles_the_choice() {
+        let mut app = SoundApp::new(Default::default(), None, Services::default());
+        app.stereo_video.enabled = true;
+        for value in [json!("false"), Value::Null, json!(0), json!([]), json!({})] {
+            assert!(app.run("video.stereo", json!({"enabled":value})).is_err());
+            assert!(app.stereo_video.enabled, "a malformed enable value toggled the existing choice");
+            assert!(!app.ui.status.is_empty());
+        }
+        app.run("video.stereo", json!({"enabled":false})).unwrap();
+        assert!(!app.stereo_video.enabled);
     }
 }
