@@ -41,6 +41,10 @@ fn set_title(ctx: &egui::Context, title: String) {
 }
 
 impl eframe::App for App {
+    fn max_redraw_wait(&self) -> Option<std::time::Duration> {
+        (self.0.stereo_video.enabled && self.0.stereo_video.shown.is_some() && self.0.is_playing()).then_some(std::time::Duration::ZERO)
+    }
+
     /// Per-frame app logic: report audio-thread logs, run the shared app logic with the macOS menu driven around it,
     /// then handle dropped paths, quit/close requests, window geometry, recent-list persistence and the window title.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
